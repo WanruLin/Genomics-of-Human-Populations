@@ -1,0 +1,173 @@
+---
+title: "BIOL-GA.1132 Assignment01"
+author: "Wanru Lin"
+date: "10/2/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# load packages
+library(tidyverse)
+library(VariantAnnotation)
+```
+
+
+## Use the VariantAnnotation package in R to assist with parsing the VCF
+
+
+```{r}
+# read the vcf file
+vcf.chr7 <- readVcf("chr7YRI_6000000_8000000.vcf","hg19")
+class(vcf.chr7)
+dim(vcf.chr7) # 73783 refSNP, 107 samples
+```
+
+```{r}
+snv.chr7 <- isSNV(vcf.chr7)
+sum(snv.chr7) # 70843 SNVs
+
+# get a logical vector with biallelic SNPs only
+bi.snv.chr7 <- isSNV(vcf.chr7,singleAltOnly=TRUE)
+# 'singleAltOnly': single alternate allele 
+sum(bi.snv.chr7) # 70843 biallelic SNPs
+
+vcf.snps_only.chr7 <- vcf.chr7[bi.snv.chr7,]
+```
+```{r}
+chr7.geno <- geno(vcf.snps_only.chr7)
+
+chr7.gt.mat <- chr7.geno[['GT']]
+head(chr7.gt.mat[,1:10])
+dim(chr7.gt.mat)
+```
+
+
+## Count alleles and deriving the allele frequencies from genotype frequencies
+
+
+```{r}
+####
+geno.tbl_df <- chr7.gt.mat %>% as.data.frame %>% 
+  as.data.frame(stringsAsFactors = F) %>%
+  rownames_to_column(var = "id") %>%
+  as_tibble
+
+geno.tbl_df[1:6, 1:6] # view
+
+class(geno.tbl_df)
+```
+```{r}
+# Now we can make our data into long format with pivot_longer
+geno.long.tbl_df <- geno.tbl_df %>%
+  pivot_longer(cols = -id, names_to = "sample", values_to = "GT")
+
+head(geno.long.tbl_df,15)
+```
+```{r}
+# I want to know what kinds of genotypes are there in the 'GT' column
+levels(factor(geno.long.tbl_df$GT)) 
+```
+```{r}
+geno.long_w_counts.tbl_df <- geno.long.tbl_df %>%
+  mutate(homref_count = ifelse(GT == "0|0",1,0 )) %>% # homo referenct count
+  mutate(het_count = ifelse(GT == "0|1" | GT =="1|0",1,0)) %>%
+  mutate(homalt_count = ifelse(GT == "1|1",1,0)) %>%
+  mutate(alt_count = homalt_count * 2 + het_count) %>% # alternative allele
+  mutate(ref_count = homref_count * 2 + het_count ) # reference allele
+
+head(geno.long_w_counts.tbl_df,15)
+
+geno.summary_per_locus <- geno.long_w_counts.tbl_df %>%
+  group_by(id) %>%
+  summarise(tot_alt_count = sum(alt_count),
+            tot_ref_count = sum(ref_count))
+head(geno.summary_per_locus)
+```
+
+```{r}
+# filter refSNPs which only have "1|1" or "0|0" in all samples
+# If only have "1|1" or "0|0" in all samples, 
+# the tot_alt_count or tot_ref_count will both equal to 214
+index_only_alt_or_ref = which(geno.summary_per_locus$tot_ref_count==214|
+                                geno.summary_per_locus$tot_alt_count==214)
+geno.without.only = geno.summary_per_locus[-index_only_alt_or_ref,]
+```
+
+```{r}
+geno.chr7 = geno.without.only %>%
+  mutate(tot_minor = 
+           case_when(tot_alt_count <= tot_ref_count ~ tot_alt_count,
+                     tot_ref_count < tot_alt_count ~ tot_ref_count,
+                     TRUE ~ NA_real_)) %>%
+  mutate(maf = tot_minor / (tot_alt_count + tot_ref_count))
+head(geno.chr7)
+```
+
+
+## Create the minor allele site frequency spectrum
+
+
+```{r}
+library(ggplot2)
+ggplot(data=geno.chr7,aes(maf))+
+  geom_histogram(bins =100,fill="blue",color="black",alpha=0.3)+
+  xlab("Minor Allele Frerquency")
+```
+
+
+## Identify counts per frequency class
+
+
+```{r}
+level_of_maf = levels(factor(geno.chr7$maf))
+
+count_of_every_maf=numeric()
+
+for (i in 1:length(level_of_maf)){
+  count_of_every_maf[i] = sum(geno.chr7$maf == level_of_maf[i])
+}
+names(count_of_every_maf) = level_of_maf
+count_of_every_maf
+```
+
+```{r}
+level_of_every_minor = levels(factor(geno.chr7$tot_minor))
+
+count_of_every_minor=numeric()
+
+for (i in 1:length(level_of_every_minor)){
+  count_of_every_minor[i] = sum(geno.chr7$tot_minor == level_of_every_minor[i])
+}
+names(count_of_every_minor) = level_of_every_minor
+count_of_every_minor
+```
+
+```{r}
+which(count_of_every_minor!=count_of_every_maf)
+```
+
+```{r}
+count_table=data.frame(total_minor=names(count_of_every_minor),
+                       minor_allele_frequency=names(count_of_every_maf),
+                       count_number=count_of_every_minor)
+count_table
+```
+
+```{r}
+write.table(count_table, file = "count_table")
+```
+
+
+
+
+
+
+
+
+
